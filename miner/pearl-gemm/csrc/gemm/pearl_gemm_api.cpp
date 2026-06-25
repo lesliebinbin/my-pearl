@@ -16,6 +16,7 @@
 #include "pearl_api_params.h"
 #include "pearl_gemm_constants.hpp"
 #include "pearl_gemm_decl.h"
+#include "pearl_gemm_sm86.h"
 #include "static_switch.h"
 
 #include <cstdio>
@@ -384,6 +385,11 @@ void noise_A(at::Tensor& A,                          // m x k
 
   auto stream = at::cuda::getCurrentCUDAStream().stream();
 
+#if !PEARL_GEMM_ENABLE_SM90
+  TORCH_CHECK(false,
+              "noise_A is still SM90/Hopper-only in this build. "
+              "The A5000 path currently supports vanilla Pearl GEMM.");
+#else
   bool kernel_found = false;
   NOISING_A_CONFIG_SWITCH(
       tile_size_m, tile_size_k, r, pipeline_stages, AxEBL.scalar_type(),
@@ -395,6 +401,7 @@ void noise_A(at::Tensor& A,                          // m x k
               "No noise_A kernel found with given config: ", "R = ", r,
               ", bM_noising = ", tile_size_m, ", AxEBL of type ",
               c10::toString(AxEBL.scalar_type()));
+#endif
 }
 
 void noise_B(at::Tensor& B,                          // n x k
@@ -485,6 +492,11 @@ void noise_B(at::Tensor& B,                          // n x k
 
   auto stream = at::cuda::getCurrentCUDAStream().stream();
 
+#if !PEARL_GEMM_ENABLE_SM90
+  TORCH_CHECK(false,
+              "noise_B is still SM90/Hopper-only in this build. "
+              "The A5000 path currently supports vanilla Pearl GEMM.");
+#else
   bool kernel_found = false;
   NOISING_B_CONFIG_SWITCH(
       tile_size_n, tile_size_k, r, pipeline_stages, EARxBpEB.scalar_type(),
@@ -497,6 +509,7 @@ void noise_B(at::Tensor& B,                          // n x k
               "No noise_B kernel found with given config: ", "R = ", r,
               ", bN_noising = ", tile_size_n, ", EARxBpEB of type ",
               c10::toString(EARxBpEB.scalar_type()));
+#endif
 }
 
 void gemm(at::Tensor& A,         // m x k
@@ -591,6 +604,11 @@ void gemm(at::Tensor& A,         // m x k
   params.ptr_pow_key = nullptr;
 
   auto stream = at::cuda::getCurrentCUDAStream().stream();
+
+#if !PEARL_GEMM_ENABLE_SM90
+  run_pearl_gemm_sm86(params, stream);
+  return;
+#else
   constexpr bool SkipReduction = true;
   constexpr bool SkipDenoising = true;
   constexpr bool EnableDebug = false;
@@ -613,6 +631,7 @@ void gemm(at::Tensor& A,         // m x k
               ", bN = ", bN, ", bK = ", bK, ", cM = ", cM, ", cN = ", cN,
               ", stages = ", pipeline_stages);
 done:;
+#endif
 }
 
 void noisy_gemm(
@@ -862,6 +881,9 @@ void noisy_gemm(
 
   auto stream = at::cuda::getCurrentCUDAStream().stream();
 
+#if !PEARL_GEMM_ENABLE_SM90
+  run_pearl_noisy_gemm_sm86(params, stream);
+#else
   bool kernel_found_matmul = false;
   bool kernel_found_noising_a = false;
   bool kernel_found_noising_b = false;
@@ -933,6 +955,7 @@ void noisy_gemm(
               ", tile_size_k_noising_B = ", tile_size_k_noising_B,
               ", pipeline_stages_noising_B = ", pipeline_stages_noising_B,
               ", EARxBpEB of type ", c10::toString(EARxBpEB_noising_dtype));
+#endif
 }
 
 HostSignalHeader get_host_signal_header(at::Tensor& host_signal_header_pinned) {

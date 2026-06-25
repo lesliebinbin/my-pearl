@@ -86,7 +86,18 @@ CORES_PER_JOB = 1
 FALLBACK_MAX_JOBS = 4
 KB_PER_GB = 1024 * 1024
 NVCC_THREAD_COUNT = "4"
-COMPUTE_CAPABILITY = "arch=compute_90a,code=sm_90a"
+CUDA_ARCH = os.getenv("PEARL_GEMM_CUDA_ARCH", "sm86").casefold()
+if CUDA_ARCH in ("sm90", "sm90a", "90", "90a"):
+    COMPUTE_CAPABILITY = "arch=compute_90a,code=sm_90a"
+    ENABLE_SM90_KERNELS = True
+elif CUDA_ARCH in ("sm86", "86", "a5000", "ampere"):
+    COMPUTE_CAPABILITY = "arch=compute_86,code=sm_86"
+    ENABLE_SM90_KERNELS = False
+else:
+    raise ValueError(
+        f"Unsupported PEARL_GEMM_CUDA_ARCH={CUDA_ARCH!r}. "
+        "Supported values: sm86, sm90a."
+    )
 
 
 def linux_total_ram_kb() -> int:
@@ -351,7 +362,7 @@ if not SKIP_CUDA_BUILD:
     print(f"cuda version = {bare_metal_version}\n\n")
     arch_flags = ["-gencode", COMPUTE_CAPABILITY]
 
-    if not SKIP_CPP_GENERATION:
+    if ENABLE_SM90_KERNELS and not SKIP_CPP_GENERATION:
         # Generate template instantiations for all possible kernels
         instantiations_dir = GEMM_DIR / "instantiations"
         print(f"Writing template instantiations to {instantiations_dir}")
@@ -375,25 +386,28 @@ if not SKIP_CUDA_BUILD:
         "csrc/gemm/noise_generation.cu",
         "csrc/gemm/denoise_converter.cu",
         "csrc/gemm/inner_hash_kernel.cu",
+        "csrc/gemm/pearl_gemm_sm86.cu",
         "csrc/blake3/blake3.cu",
         "csrc/tensor_hash/tensor_hash.cu",
         "csrc/moe/build_routing_data.cu",
     ]
-    sources.extend(
-        f"csrc/gemm/instantiations/gemm_R{cfg.R}_{out_type}_{cfg.tile_size_m}x{cfg.tile_size_n}x{cfg.tile_size_k}_{cfg.pipeline_stages}stages_cluster{cfg.cM}x{cfg.cN}.cu"
-        for cfg in MATMUL_KERNELS
-        for out_type in OUTPUT_TYPES
-    )
-    sources.extend(
-        f"csrc/gemm/instantiations/noisingA_R{cfg.R}_{cfg.AxEBL_type}_{cfg.tile_size_m}x{cfg.tile_size_k}_{cfg.pipeline_stages}stages.cu"
-        for cfg in NOISING_A_KERNELS
-    )
-    sources.extend(
-        f"csrc/gemm/instantiations/noisingB_R{cfg.R}_{cfg.EARxBpEB_type}_{cfg.tile_size_n}x{cfg.tile_size_k}_{cfg.pipeline_stages}stages.cu"
-        for cfg in NOISING_B_KERNELS
-    )
+    if ENABLE_SM90_KERNELS:
+        sources.extend(
+            f"csrc/gemm/instantiations/gemm_R{cfg.R}_{out_type}_{cfg.tile_size_m}x{cfg.tile_size_n}x{cfg.tile_size_k}_{cfg.pipeline_stages}stages_cluster{cfg.cM}x{cfg.cN}.cu"
+            for cfg in MATMUL_KERNELS
+            for out_type in OUTPUT_TYPES
+        )
+        sources.extend(
+            f"csrc/gemm/instantiations/noisingA_R{cfg.R}_{cfg.AxEBL_type}_{cfg.tile_size_m}x{cfg.tile_size_k}_{cfg.pipeline_stages}stages.cu"
+            for cfg in NOISING_A_KERNELS
+        )
+        sources.extend(
+            f"csrc/gemm/instantiations/noisingB_R{cfg.R}_{cfg.EARxBpEB_type}_{cfg.tile_size_n}x{cfg.tile_size_k}_{cfg.pipeline_stages}stages.cu"
+            for cfg in NOISING_B_KERNELS
+        )
 
     feature_args = [f"-D{name}" for name, enabled in FEATURE_FLAGS.items() if enabled]
+    feature_args.append(f"-DPEARL_GEMM_ENABLE_SM90={int(ENABLE_SM90_KERNELS)}")
 
     gcc_flags = [
         "-O3",

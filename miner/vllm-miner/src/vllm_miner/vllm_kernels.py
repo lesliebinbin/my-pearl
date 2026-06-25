@@ -61,8 +61,8 @@ class PearlKernel(Int8ScaledMMLinearKernel):
 
     @classmethod
     def get_min_capability(cls) -> int:
-        # Pearl GEMM kernels require Hopper or newer
-        return 9
+        # sm_86 has dense vanilla and noisy GEMM CUDA paths for A5000 mining.
+        return 8
 
     @override
     @classmethod
