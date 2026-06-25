@@ -7,6 +7,7 @@
 
 #include "blake3/blake3.cuh"
 #include "host_signal_header.hpp"
+#include "pearl_gemm_constants.hpp"
 
 namespace pearl_sm86_detail {
 
@@ -52,6 +53,128 @@ __device__ void compute_jackpot_hash_sm86(uint32_t const* jackpot,
 
   for (int i = 0; i < blake3::CHAINING_VALUE_SIZE_U32; ++i) {
     hash[i] = chaining_value(i);
+  }
+}
+
+__device__ __forceinline__ uint32_t load_le_u32(uint8_t const* ptr) {
+  return static_cast<uint32_t>(ptr[0]) |
+         (static_cast<uint32_t>(ptr[1]) << 8) |
+         (static_cast<uint32_t>(ptr[2]) << 16) |
+         (static_cast<uint32_t>(ptr[3]) << 24);
+}
+
+__device__ void compute_noise_hash_sm86(uint8_t const* key, bool sparse,
+                                        uint32_t thread_coord,
+                                        uint32_t* hash) {
+  auto block = cute::make_tensor<uint32_t>(cute::Int<blake3::MSG_BLOCK_SIZE_U32>{});
+  auto chaining_value =
+      cute::make_tensor<uint32_t>(cute::Int<blake3::CHAINING_VALUE_SIZE_U32>{});
+
+  for (int i = 0; i < blake3::MSG_BLOCK_SIZE_U32; ++i) {
+    block(i) = 0;
+  }
+  for (int i = 0; i < blake3::CHAINING_VALUE_SIZE_U32; ++i) {
+    chaining_value(i) = load_le_u32(key + i * sizeof(uint32_t));
+  }
+
+  block(sparse ? 1 : 0) = thread_coord;
+  constexpr int message_offset =
+      (blake3::MSG_BLOCK_SIZE_U32 - blake3::KEY_SIZE / sizeof(uint32_t));
+  // "A_tensor" / "B_tensor"; caller patches the first word for B.
+  block(message_offset) = sparse ? 0x65745f41u : 0x65745f41u;
+  block(message_offset + 1) = 0x726f736eu;
+
+  blake3::compress_msg_block_u32(block, chaining_value,
+                                 blake3::COMPRESS_PARAMS_SINGLE_BLOCK_KEYED);
+
+  for (int i = 0; i < blake3::CHAINING_VALUE_SIZE_U32; ++i) {
+    hash[i] = chaining_value(i);
+  }
+}
+
+__device__ void compute_noise_hash_sm86(uint8_t const* key, bool write_a,
+                                        bool sparse, uint32_t thread_coord,
+                                        uint32_t* hash) {
+  auto block = cute::make_tensor<uint32_t>(cute::Int<blake3::MSG_BLOCK_SIZE_U32>{});
+  auto chaining_value =
+      cute::make_tensor<uint32_t>(cute::Int<blake3::CHAINING_VALUE_SIZE_U32>{});
+
+  for (int i = 0; i < blake3::MSG_BLOCK_SIZE_U32; ++i) {
+    block(i) = 0;
+  }
+  for (int i = 0; i < blake3::CHAINING_VALUE_SIZE_U32; ++i) {
+    chaining_value(i) = load_le_u32(key + i * sizeof(uint32_t));
+  }
+
+  block(sparse ? 1 : 0) = thread_coord;
+  constexpr int message_offset =
+      (blake3::MSG_BLOCK_SIZE_U32 - blake3::KEY_SIZE / sizeof(uint32_t));
+  block(message_offset) = write_a ? 0x65745f41u : 0x65745f42u;
+  block(message_offset + 1) = 0x726f736eu;
+
+  blake3::compress_msg_block_u32(block, chaining_value,
+                                 blake3::COMPRESS_PARAMS_SINGLE_BLOCK_KEYED);
+
+  for (int i = 0; i < blake3::CHAINING_VALUE_SIZE_U32; ++i) {
+    hash[i] = chaining_value(i);
+  }
+}
+
+__global__ void sm86_noise_gen_dense_kernel(int8_t* dense, __half* dense_fp16,
+                                            int rows, int r,
+                                            uint8_t const* key, bool write_a) {
+  int chunk = blockIdx.x * blockDim.x + threadIdx.x;
+  int chunks = (rows * r) / 32;
+  if (chunk >= chunks) {
+    return;
+  }
+
+  uint32_t hash[blake3::CHAINING_VALUE_SIZE_U32];
+  compute_noise_hash_sm86(key, write_a, false, chunk + 1, hash);
+
+  int base = chunk * 32;
+  for (int i = 0; i < 32; ++i) {
+    uint8_t byte = static_cast<uint8_t>(hash[i / 4] >> (8 * (i % 4)));
+    int8_t value = static_cast<int8_t>(static_cast<int>(byte % 64) - 32);
+    dense[base + i] = value;
+    if (dense_fp16 != nullptr) {
+      int scale = write_a ? pearl::kEALScaleFactorDenoise
+                          : pearl::kEBRScaleFactorDenoise;
+      dense_fp16[base + i] = __float2half(static_cast<float>(value * scale));
+    }
+  }
+}
+
+__global__ void sm86_noise_gen_sparse_kernel(int8_t* sparse_r_major,
+                                             int8_t* sparse_k_major, int k,
+                                             int r, uint8_t const* key,
+                                             bool write_a) {
+  int chunk = blockIdx.x * blockDim.x + threadIdx.x;
+  int base_k = chunk * blake3::CHAINING_VALUE_SIZE_U32;
+  if (base_k >= k) {
+    return;
+  }
+
+  uint32_t hash[blake3::CHAINING_VALUE_SIZE_U32];
+  compute_noise_hash_sm86(key, write_a, true, chunk + 1, hash);
+
+  for (int i = 0; i < blake3::CHAINING_VALUE_SIZE_U32; ++i) {
+    int kk = base_k + i;
+    if (kk >= k) {
+      return;
+    }
+    uint32_t u = hash[i];
+    int r0 = static_cast<int>(u & static_cast<uint32_t>(r - 1));
+    int r1 = r0 ^ (1 + static_cast<int>(
+                           (static_cast<uint64_t>(r - 1) * u) >> 32));
+    if (sparse_r_major != nullptr) {
+      sparse_r_major[kk * r + r0] = 1;
+      sparse_r_major[kk * r + r1] = -1;
+    }
+    if (sparse_k_major != nullptr) {
+      sparse_k_major[r0 * k + kk] = 1;
+      sparse_k_major[r1 * k + kk] = -1;
+    }
   }
 }
 
@@ -274,6 +397,66 @@ void run_pearl_gemm_sm86(PearlAPIParams const& params, cudaStream_t stream) {
       static_cast<float const*>(params.ptr_B_scales),
       static_cast<__nv_bfloat16*>(params.ptr_C), params.m, params.n,
       params.k);
+}
+
+void run_noise_generation_sm86(Noise_gen_params const& params,
+                               cudaStream_t stream) {
+  constexpr int threads = 256;
+  auto blocks_for = [](int work) { return (work + threads - 1) / threads; };
+
+  if (params.ptr_EAL != nullptr) {
+    int chunks = (params.m * params.r) / 32;
+    pearl_sm86_detail::sm86_noise_gen_dense_kernel<<<blocks_for(chunks), threads,
+                                                     0, stream>>>(
+        static_cast<int8_t*>(params.ptr_EAL),
+        static_cast<__half*>(params.ptr_EAL_fp16), params.m, params.r,
+        static_cast<uint8_t const*>(params.ptr_key_A), true);
+  }
+  if (params.ptr_EBR != nullptr) {
+    int chunks = (params.n * params.r) / 32;
+    pearl_sm86_detail::sm86_noise_gen_dense_kernel<<<blocks_for(chunks), threads,
+                                                     0, stream>>>(
+        static_cast<int8_t*>(params.ptr_EBR),
+        static_cast<__half*>(params.ptr_EBR_fp16), params.n, params.r,
+        static_cast<uint8_t const*>(params.ptr_key_B), false);
+  }
+
+  if (params.ptr_EAR_R_major != nullptr) {
+    cudaMemsetAsync(params.ptr_EAR_R_major, 0, params.k * params.r, stream);
+  }
+  if (params.ptr_EAR_K_major != nullptr) {
+    cudaMemsetAsync(params.ptr_EAR_K_major, 0, params.k * params.r, stream);
+  }
+  if (params.ptr_EAR_R_major != nullptr || params.ptr_EAR_K_major != nullptr) {
+    int chunks = (params.k + blake3::CHAINING_VALUE_SIZE_U32 - 1) /
+                 blake3::CHAINING_VALUE_SIZE_U32;
+    pearl_sm86_detail::sm86_noise_gen_sparse_kernel<<<blocks_for(chunks),
+                                                      threads, 0, stream>>>(
+        static_cast<int8_t*>(params.ptr_EAR_R_major),
+        static_cast<int8_t*>(params.ptr_EAR_K_major), params.k, params.r,
+        static_cast<uint8_t const*>(params.ptr_key_A), true);
+  }
+
+  if (params.ptr_EBL_R_major != nullptr) {
+    cudaMemsetAsync(params.ptr_EBL_R_major, 0, params.k * params.r, stream);
+  }
+  if (params.ptr_EBL_K_major != nullptr) {
+    cudaMemsetAsync(params.ptr_EBL_K_major, 0, params.k * params.r, stream);
+  }
+  if (params.ptr_EBL_R_major != nullptr || params.ptr_EBL_K_major != nullptr) {
+    int chunks = (params.k + blake3::CHAINING_VALUE_SIZE_U32 - 1) /
+                 blake3::CHAINING_VALUE_SIZE_U32;
+    pearl_sm86_detail::sm86_noise_gen_sparse_kernel<<<blocks_for(chunks),
+                                                      threads, 0, stream>>>(
+        static_cast<int8_t*>(params.ptr_EBL_R_major),
+        static_cast<int8_t*>(params.ptr_EBL_K_major), params.k, params.r,
+        static_cast<uint8_t const*>(params.ptr_key_B), false);
+  }
+
+  if (params.ptr_aux_buffer != nullptr && params.aux_buffer_size > 0) {
+    cudaMemsetAsync(params.ptr_aux_buffer, 0,
+                   params.aux_buffer_size * sizeof(uint32_t), stream);
+  }
 }
 
 void run_pearl_noisy_gemm_sm86(PearlAPIParams const& params,

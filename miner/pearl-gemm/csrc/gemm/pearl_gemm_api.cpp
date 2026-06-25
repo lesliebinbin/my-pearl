@@ -281,6 +281,9 @@ void noise_gen(const int64_t R, const int64_t num_threads,
 
   auto stream = at::cuda::getCurrentCUDAStream().stream();
 
+#if !PEARL_GEMM_ENABLE_SM90
+  run_noise_generation_sm86(params, stream);
+#else
   bool kernel_found = false;
   NUM_THREADS_SWITCH(
       num_threads, NumThreads,
@@ -296,6 +299,7 @@ void noise_gen(const int64_t R, const int64_t num_threads,
     TORCH_CHECK(false, "No noise_gen kernel found with given config: R = ", R,
                 ", num_threads = ", num_threads);
   }
+#endif
 }
 
 void noise_A(at::Tensor& A,                          // m x k

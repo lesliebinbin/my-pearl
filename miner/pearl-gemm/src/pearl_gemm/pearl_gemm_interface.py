@@ -1,7 +1,23 @@
 import pearl_gemm_cuda
 import torch
+from blake3 import blake3
+from miner_base.matrix_merkle_tree import MatrixMerkleTree
 
 BLAKE3_DIGEST_SIZE_U32 = 8
+BLAKE3_DIGEST_SIZE_BYTES = 32
+
+
+def _use_sm86_hash_fallback(tensor: torch.Tensor) -> bool:
+    return tensor.is_cuda and torch.cuda.get_device_capability(tensor.device)[0] < 9
+
+
+def _tensor_bytes(tensor: torch.Tensor) -> bytes:
+    return tensor.detach().contiguous().cpu().numpy().tobytes()
+
+
+def _copy_digest_to_cuda(digest: bytes, out: torch.Tensor) -> None:
+    digest_tensor = torch.tensor(list(digest), dtype=torch.uint8, device=out.device)
+    out.copy_(digest_tensor)
 
 
 def make_pow_target_tensor(value: int, device="cuda") -> torch.Tensor:
@@ -573,6 +589,11 @@ def tensor_hash(
     Returns:
         Tensor: Hash output tensor
     """
+    if _use_sm86_hash_fallback(data):
+        digest = MatrixMerkleTree.tensor_hash(data.detach().contiguous().cpu(), _tensor_bytes(key))
+        _copy_digest_to_cuda(digest, out)
+        return None
+
     return pearl_gemm_cuda.tensor_hash(
         data, key, out, roots, threads_per_block, num_stages, leaves_per_mt_block
     )
@@ -590,6 +611,21 @@ def commitment_hash_from_merkle_roots(
     """
     Compute the commitment hash from merkle roots of a 2D tensor.
     """
+    if _use_sm86_hash_fallback(A_merkle_root):
+        key_bytes = _tensor_bytes(key)
+        b_root = _tensor_bytes(B_merkle_root)
+        a_root = _tensor_bytes(A_merkle_root)
+
+        b_commitment = blake3(key_bytes + b_root).digest()
+        if routing_root is not None:
+            routing_hash = blake3(_tensor_bytes(routing_root) + _tensor_bytes(offsets_hash)).digest()
+            a_root = blake3(a_root + routing_hash).digest()
+        a_commitment = blake3(b_commitment + a_root).digest()
+
+        _copy_digest_to_cuda(a_commitment, A_commitment_hash)
+        _copy_digest_to_cuda(b_commitment, B_commitment_hash)
+        return None
+
     return pearl_gemm_cuda.commitment_hash_from_merkle_roots(
         A_merkle_root,
         B_merkle_root,
