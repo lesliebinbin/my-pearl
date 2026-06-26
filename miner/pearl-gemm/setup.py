@@ -86,17 +86,37 @@ CORES_PER_JOB = 1
 FALLBACK_MAX_JOBS = 4
 KB_PER_GB = 1024 * 1024
 NVCC_THREAD_COUNT = "4"
-CUDA_ARCH = os.getenv("PEARL_GEMM_CUDA_ARCH", "sm86").casefold()
-if CUDA_ARCH in ("sm90", "sm90a", "90", "90a"):
+
+
+def _select_cuda_arch() -> str:
+    cuda_arch = os.getenv("PEARL_GEMM_CUDA_ARCH", "auto").casefold()
+    if cuda_arch != "auto":
+        return cuda_arch
+
+    if torch.cuda.is_available():
+        major, minor = torch.cuda.get_device_capability()
+        return f"sm{major}{minor}"
+
+    return "sm86"
+
+
+CUDA_ARCH = _select_cuda_arch()
+if CUDA_ARCH in ("sm90", "sm90a", "90", "90a", "hopper"):
     COMPUTE_CAPABILITY = "arch=compute_90a,code=sm_90a"
     ENABLE_SM90_KERNELS = True
 elif CUDA_ARCH in ("sm86", "86", "a5000", "ampere"):
     COMPUTE_CAPABILITY = "arch=compute_86,code=sm_86"
     ENABLE_SM90_KERNELS = False
+elif CUDA_ARCH in ("sm89", "89", "4090", "ada"):
+    COMPUTE_CAPABILITY = "arch=compute_89,code=sm_89"
+    ENABLE_SM90_KERNELS = False
+elif CUDA_ARCH in ("sm120", "120", "5090", "5090d", "blackwell"):
+    COMPUTE_CAPABILITY = "arch=compute_120,code=sm_120"
+    ENABLE_SM90_KERNELS = False
 else:
     raise ValueError(
         f"Unsupported PEARL_GEMM_CUDA_ARCH={CUDA_ARCH!r}. "
-        "Supported values: sm86, sm90a."
+        "Supported values: auto, sm86, sm89, sm90a, sm120."
     )
 
 

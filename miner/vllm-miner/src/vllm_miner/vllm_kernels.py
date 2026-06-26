@@ -61,7 +61,7 @@ class PearlKernel(Int8ScaledMMLinearKernel):
 
     @classmethod
     def get_min_capability(cls) -> int:
-        # sm_86 has dense vanilla and noisy GEMM CUDA paths for A5000 mining.
+        # The non-Hopper CUDA path supports sm_86+ devices, including RTX 5090D.
         return 8
 
     @override
