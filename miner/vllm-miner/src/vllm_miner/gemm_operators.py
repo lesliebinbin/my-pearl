@@ -114,6 +114,13 @@ def pearl_gemm_noisy(
 
     # Calculate adjusted pow_target
     adjusted_target = mining_job.adjust_target(mining_config=matmul_config.mining_config)
+    print(
+        "[pearl-miner] dense noisy GEMM mining launch: "
+        f"m={m}, n={n}, k={k}, noise_rank={r}, submit_block={submit_block}, "
+        f"target=0x{adjusted_target:x}, "
+        f"header={mining_job.incomplete_header_bytes[:8].hex()}...",
+        flush=True,
+    )
 
     hash_key = CommitmentHasher.get_key(
         mining_job.incomplete_header_bytes, matmul_config.mining_config

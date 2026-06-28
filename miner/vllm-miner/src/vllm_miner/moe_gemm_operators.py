@@ -141,6 +141,13 @@ def prepare_moe_noising(
     pow_target = make_pow_target_tensor(
         mining_job.adjust_target(mining_config=matmul_config.mining_config)
     )
+    print(
+        "[pearl-miner] MoE noisy GEMM mining prepare: "
+        f"tokens={num_tokens}, experts={num_experts}, top_k={top_k}, "
+        f"hidden_size={hidden_size}, stacked_weight_rows={num_stacked_weight_rows}, "
+        f"noise_rank={noise_rank}, header={mining_job.incomplete_header_bytes[:8].hex()}...",
+        flush=True,
+    )
 
     hash_key = CommitmentHasher.get_key(
         mining_job.incomplete_header_bytes, matmul_config.mining_config
