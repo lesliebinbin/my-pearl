@@ -1,0 +1,23 @@
+[project]
+name = "custom-miner"
+version = "0.1.0"
+description = "Experimental custom miner utilities for Pearl Gateway"
+requires-python = ">=3.12"
+dependencies = [
+  "miner-base",
+  "pearl-gateway",
+  "pearl-gemm",
+  "py-pearl-mining",
+  "torch==2.11.0",
+]
+
+[tool.uv]
+package = false
+
+[tool.uv.sources]
+miner-base = { path = "../miner/miner-base", editable = true }
+miner-utils = { path = "../miner/miner-utils", editable = true }
+pearl-gateway = { path = "../miner/pearl-gateway", editable = true }
+pearl-gemm = { path = "../miner/pearl-gemm", editable = true }
+pearl-gemm-build-utils = { path = "../miner/pearl-gemm-build-utils", editable = true }
+py-pearl-mining = { path = "../py-pearl-mining", editable = true }

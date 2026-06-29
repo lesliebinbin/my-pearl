@@ -1,0 +1,105 @@
+runtime:
+  iterations: 0          # 0 means run forever
+  seed: null
+  log_level: info
+  report_every_attempts: 10 # Alpha-style cumulative status every N attempts; set 0 to use time interval
+  report_interval_seconds: 5.0
+  submit: true          # false is dry-run; true submits proofs to gateway on hit
+  max_materialized_output_gib: 8
+
+gateway:
+  transport: uds
+  socket_path: /tmp/pearlgw.sock
+  host: localhost
+  port: 8337
+  refresh_job_seconds: 1.0
+
+matrix:
+  # materialized: matrix.m/n are the full GEMM shape.
+  # tiled: logical_m/logical_n describe the Alpha-style profile, while m/n are the
+  # smaller physical tile allocated and mined each attempt.
+  mode: tiled
+  seed: null            # null auto-generates a seed; set an integer for reproducible matrices
+  logical_m: 131072
+  logical_n: 131072
+  m: 4096
+  n: 4096
+  k: 4096
+  strategy: uniform      # uniform, normal, rademacher
+  normal_mean: 0.0
+  normal_std: 16.0
+  reuse_b: true
+
+mining:
+  rank: 128
+  h: 2
+  w: 64
+  tile_m: 128
+  tile_n: 256
+  tile_k: 128
+  rows_pattern: [0, 8]
+  cols_pattern:
+    - 0
+    - 1
+    - 8
+    - 9
+    - 16
+    - 17
+    - 24
+    - 25
+    - 32
+    - 33
+    - 40
+    - 41
+    - 48
+    - 49
+    - 56
+    - 57
+    - 64
+    - 65
+    - 72
+    - 73
+    - 80
+    - 81
+    - 88
+    - 89
+    - 96
+    - 97
+    - 104
+    - 105
+    - 112
+    - 113
+    - 120
+    - 121
+    - 128
+    - 129
+    - 136
+    - 137
+    - 144
+    - 145
+    - 152
+    - 153
+    - 160
+    - 161
+    - 168
+    - 169
+    - 176
+    - 177
+    - 184
+    - 185
+    - 192
+    - 193
+    - 200
+    - 201
+    - 208
+    - 209
+    - 216
+    - 217
+    - 224
+    - 225
+    - 232
+    - 233
+    - 240
+    - 241
+    - 248
+    - 249
