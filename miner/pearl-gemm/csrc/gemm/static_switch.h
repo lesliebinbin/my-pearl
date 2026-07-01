@@ -103,6 +103,8 @@
     __VA_ARGS__;                                                            \
   }
 
+#if PEARL_GEMM_ENABLE_SM90
 #include "static_switch_matmul.h"
 #include "static_switch_noisingA.h"
 #include "static_switch_noisingB.h"
+#endif
