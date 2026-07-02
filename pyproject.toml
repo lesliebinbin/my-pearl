@@ -65,5 +65,6 @@ members = [
   "py-pearl-mining",
   "miner/vllm-miner",
   "miner/pearl-gemm-build-utils",
-  "miner/pearl-gemm"
+  "miner/pearl-gemm",
+  "custom_miner"
 ]
